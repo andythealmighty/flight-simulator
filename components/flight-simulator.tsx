@@ -228,6 +228,10 @@ export function FlightSimulator() {
   const [currentTips, setCurrentTips] = useState<string[]>([])
   const [showAdvancedMetrics, setShowAdvancedMetrics] = useState(false)
   const [selectedModel, setSelectedModel] = useState("/3d/boeing_737_american_airlines.glb")
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [lastAnnouncement, setLastAnnouncement] = useState("");
+  const announcementTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const previousCompletedStepsRef = useRef<number[]>([]);
   
   // 항공기 프리셋에 3D 모델 경로 추가
   const aircraftPresets = {
@@ -508,6 +512,82 @@ export function FlightSimulator() {
       }, 2000)
     }
   }, [parameters, currentTutorial, tutorialActive, completedSteps])
+
+  // 음성 안내 유틸리티
+  const speakText = (text: string, rate = 1, pitch = 1, volume = 1) => {
+    // 브라우저에서 실행 중인지 확인
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      // 이미 말하고 있는 경우 중지
+      window.speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = rate;     // 0.1 ~ 10
+      utterance.pitch = pitch;   // 0 ~ 2
+      utterance.volume = volume; // 0 ~ 1
+      utterance.lang = 'en-US';  // 한국어 설정
+      
+      window.speechSynthesis.speak(utterance);
+      return true;
+    }
+    return false;
+  };
+
+  // 음성 안내 함수
+  const announceStatus = (message: string, force = false) => {
+    // 음성이 비활성화되어 있고 강제 안내가 아니면 무시
+    if (!voiceEnabled && !force) return;
+    
+    // 같은 메시지 반복 방지 (3초 내에)
+    if (message === lastAnnouncement) return;
+    
+    // 이전 타이머 취소
+    if (announcementTimeoutRef.current) {
+      clearTimeout(announcementTimeoutRef.current);
+    }
+    
+    // 메시지 발화
+    speakText(message);
+    setLastAnnouncement(message);
+    
+    // 3초 후 마지막 안내 메시지 초기화
+    announcementTimeoutRef.current = setTimeout(() => {
+      setLastAnnouncement("");
+    }, 3000);
+  };
+
+  // 비행 상태 음성 안내
+  useEffect(() => {
+    if (!voiceEnabled) return;
+    
+    // 스톨 상태 안내
+    if (isStalling) {
+      announceStatus("warning, stall condition. reduce angle of attack.");
+    }
+    
+    // 고도 변화 안내
+    const liftWeightDiff = forces.lift - forces.weight;
+    if (liftWeightDiff > 10000) {
+      announceStatus("ascending.");
+    } else if (liftWeightDiff < -10000) {
+      announceStatus("descending.");
+    }
+    
+    // 속도 안내
+    if (parameters.airspeed < 150) {
+      announceStatus("speed is too low.");
+    } else if (parameters.airspeed > 400) {
+      announceStatus("speed is too high.");
+    }
+    
+    // 튜토리얼 단계 완료 안내
+    if (tutorialActive && completedSteps.length > 0 && 
+        completedSteps.length > previousCompletedStepsRef.current.length) {
+      announceStatus("step completed. good job.");
+    }
+    
+    // 현재 완료 단계 저장
+    previousCompletedStepsRef.current = completedSteps;
+  }, [isStalling, parameters.airspeed, forces.lift, forces.weight, completedSteps, voiceEnabled, tutorialActive]);
 
   const resetSimulation = () => {
     setIsRunning(false)
@@ -855,6 +935,20 @@ export function FlightSimulator() {
               <BookOpen className="h-4 w-4 mr-2" />
               {tutorialActive ? "Tutorial Active" : "Start Guided Tutorial"}
             </Button>
+            
+            {/* 음성 안내 토글 버튼 추가 */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-serif">Voice Guidance</span>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setVoiceEnabled(!voiceEnabled)} 
+                className={`font-serif ${voiceEnabled ? 'bg-primary text-primary-foreground' : ''}`}
+              >
+                {voiceEnabled ? 'On' : 'Off'}
+              </Button>
+            </div>
+            
             <div className="flex items-center justify-between">
               <span className="text-sm font-serif">Show Hints</span>
               <Button variant="outline" size="sm" onClick={() => setShowHints(!showHints)} className="font-serif">
